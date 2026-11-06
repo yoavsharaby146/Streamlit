@@ -203,6 +203,18 @@ def download_png(fig, pid):
     st.download_button("Download PNG", buf.getvalue(), file_name=f"{pid}.png",
                        mime="image/png", key=f"{pid}-dl")
 
+
+def show_fig(fig, dpi=110):
+    """Render a figure at its natural pixel size (figsize x dpi).
+
+    Unlike width='stretch', the on-screen size stays the same whether
+    sidebars / expanders are open or closed, so side-by-side panels keep
+    their relative sizes; it only shrinks if the column is narrower.
+    """
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi)
+    st.image(buf.getvalue())
+
 def _x_slider_changed(pid):
     """A panel's X slider moved: write the value back to its source —
     the shared X field when syncing (all panels scrub together), or the
@@ -388,7 +400,7 @@ def render_angular(session, pid, ov, compact):
         ttl += "\nWARNING: x outside range for some file(s), clamped to end value"
     ax.set_title(ttl, fontsize=11, fontweight="bold", pad=20)
     with plot_box:
-        st.pyplot(fig, width="stretch")
+        show_fig(fig)
         st.caption(f"x range in files ({x_col}): {lo:g} to {hi:g}")
         # X slice slider under the plot: dragging it updates the shared X
         # when syncing (all panels scrub together), else only this panel
@@ -602,7 +614,7 @@ def render_plotdata(session, pid, ov, compact):
         ax.legend(fontsize=leg_size, loc=LEGEND_POS[leg_pos], ncol=int(leg_cols))
 
     with plot_box:
-        st.pyplot(fig, width="stretch")
+        show_fig(fig)
         download_png(fig, pid)
         st.caption(f"{len(series)} series from {len(names)} dataset(s)")
     plt.close(fig)
