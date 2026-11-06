@@ -318,7 +318,9 @@ def render_angular(session, pid, ov, compact):
             st.session_state[f"{pid}-xtext_last"] = f"{vals[0]:g}"
 
     # ---- plot ----
-    fig, ax = plt.subplots(figsize=(6.2, 5.6) if compact else (7, 6),
+    # compact (side-by-side): shorter figure so the slider + caption
+    # below still keep the panel within one screen height
+    fig, ax = plt.subplots(figsize=(6.2, 4.5) if compact else (7, 6),
                            subplot_kw=dict(projection="polar"))
     ax.set_theta_zero_location(THETA_ZERO_MAP.get(theta_zero, "N"))
     ax.set_theta_direction(-1 if direction == "Clockwise" else 1)
@@ -541,8 +543,10 @@ def render_plotdata(session, pid, ov, compact):
         style_ed = st.data_editor(pd.DataFrame(style_rows), hide_index=True,
                                   key=f"{pid}-style-{sig}")
 
-    # same aspect as the polar panels in compact mode -> equal heights
-    fig, ax = plt.subplots(figsize=(6.2, 5.6) if compact else (9, 5))
+    # compact: taller than the polar figure on purpose - the polar panel
+    # carries its slider + caption below the plot, so both panel types
+    # end up roughly the same overall height side by side
+    fig, ax = plt.subplots(figsize=(6.2, 5.1) if compact else (9, 5))
     if color_mode == "Gradient" and series:
         cmap = plt.get_cmap(cmap_name)
         colors = [cmap(v) for v in np.linspace(0, 1, len(series))] \
