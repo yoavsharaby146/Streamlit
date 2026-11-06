@@ -283,6 +283,37 @@ def _z_col_changed(pid):
     st.session_state[f"{pid}-zmax"] = p.get("zmax", np.nan)
 
 
+def _x_col_changed_sw(pid):
+    """Plot Data X column changed: swap in that column's remembered axis
+    label and X range (per-column sticky memory, like the Z feature)."""
+    xc = st.session_state[f"{pid}-xcol"]
+    p = st.session_state.get(f"{pid}-xprefs-{xc}") or {}
+    st.session_state[f"{pid}-xlabel"] = p.get("label", xc)
+    st.session_state[f"{pid}-xmin"] = p.get("xmin", np.nan)
+    st.session_state[f"{pid}-xmax"] = p.get("xmax", np.nan)
+
+
+def _y_col_changed_sw(pid):
+    """Plot Data Y selection changed: swap the FIRST selected Y column's
+    remembered axis label and Y range into the widgets."""
+    ycs = st.session_state.get(f"{pid}-ycols") or []
+    new = ycs[0] if ycs else None
+    old = st.session_state.get(f"{pid}-ycol_cur")
+    if new == old:
+        return
+    if old:
+        st.session_state[f"{pid}-yprefs-{old}"] = {
+            "label": st.session_state.get(f"{pid}-ylabel", ""),
+            "ymin": st.session_state.get(f"{pid}-ymin", np.nan),
+            "ymax": st.session_state.get(f"{pid}-ymax", np.nan),
+        }
+    p = (st.session_state.get(f"{pid}-yprefs-{new}") or {}) if new else {}
+    st.session_state[f"{pid}-ylabel"] = p.get("label", new or "")
+    st.session_state[f"{pid}-ymin"] = p.get("ymin", np.nan)
+    st.session_state[f"{pid}-ymax"] = p.get("ymax", np.nan)
+    st.session_state[f"{pid}-ycol_cur"] = new
+
+
 # ==================== Angular Polar panel ====================
 def render_angular(session, pid, ov, compact):
     files = session.get("files", [])
@@ -499,14 +530,38 @@ def render_plotdata(session, pid, ov, compact):
         cols = list(ref.columns)
         x_col = (ov["x_col"] if ov and ov["x_col"] in cols else
                  st.selectbox("X column", cols, key=f"{pid}-xcol",
-                              index=opt_index(cols, sel.get("x_column"), 0)))
+                              index=opt_index(cols, sel.get("x_column"), 0),
+                              on_change=_x_col_changed_sw, args=(pid,)))
+        # per-X sticky settings: each X column remembers its own axis label
+        # and X range; switching X swaps them in (see _x_col_changed_sw)
+        xpref_key = f"{pid}-xprefs-{x_col}"
+        if st.session_state.get(xpref_key) is None:
+            x0 = sel.get("x_column")
+            st.session_state[xpref_key] = {
+                "label": tl.get("xlabel", x_col) if x_col == x0 else x_col,
+                "xmin": _f(ar.get("x_min"), np.nan) if x_col == x0 else np.nan,
+                "xmax": _f(ar.get("x_max"), np.nan) if x_col == x0 else np.nan,
+            }
+        for _wk, _pk in ((f"{pid}-xlabel", "label"), (f"{pid}-xmin", "xmin"),
+                         (f"{pid}-xmax", "xmax")):
+            if _wk not in st.session_state:
+                st.session_state[_wk] = st.session_state[xpref_key][_pk]
         default_y = [c for c in sel.get("y_column", []) if c in cols]
         if ov and ov["y_col"] in cols:
             y_cols = [ov["y_col"]]
         else:
             y_cols = st.multiselect("Y columns", cols,
                                     default=default_y or [cols[-1]],
-                                    key=f"{pid}-ycols")
+                                    key=f"{pid}-ycols",
+                                    on_change=_y_col_changed_sw, args=(pid,))
+        # per-Y sticky settings: the FIRST selected Y column drives the axis
+        if f"{pid}-ycol_cur" not in st.session_state:
+            st.session_state[f"{pid}-ycol_cur"] = y_cols[0] if y_cols else None
+        for _wk, _v in ((f"{pid}-ylabel", tl.get("ylabel", "")),
+                        (f"{pid}-ymin", _f(ar.get("y_min"), np.nan)),
+                        (f"{pid}-ymax", _f(ar.get("y_max"), np.nan))):
+            if _wk not in st.session_state:
+                st.session_state[_wk] = _v
         plot_type = (ov["plot_type"] if ov else None) or st.selectbox(
             "Plot type", ["Line", "Scatter", "Color Map"], key=f"{pid}-ptype",
             index=opt_index(["Line", "Scatter", "Color Map"],
@@ -560,14 +615,15 @@ def render_plotdata(session, pid, ov, compact):
     # ---- axes, grid & ticks ----
     with st.expander("Axes, grid & ticks"):
         c1, c2 = st.columns(2)
-        x_min = c1.number_input("X min", value=_f(ar.get("x_min"), np.nan),
-                                step=None, format="%g", key=f"{pid}-xmin")
-        x_max = c2.number_input("X max", value=_f(ar.get("x_max"), np.nan),
-                                step=None, format="%g", key=f"{pid}-xmax")
-        y_min = c1.number_input("Y min", value=_f(ar.get("y_min"), np.nan),
-                                step=None, format="%g", key=f"{pid}-ymin")
-        y_max = c2.number_input("Y max", value=_f(ar.get("y_max"), np.nan),
-                                step=None, format="%g", key=f"{pid}-ymax")
+        # defaults come from the per-column preferences in session state
+        x_min = c1.number_input("X min", step=None, format="%g",
+                                key=f"{pid}-xmin")
+        x_max = c2.number_input("X max", step=None, format="%g",
+                                key=f"{pid}-xmax")
+        y_min = c1.number_input("Y min", step=None, format="%g",
+                                key=f"{pid}-ymin")
+        y_max = c2.number_input("Y max", step=None, format="%g",
+                                key=f"{pid}-ymax")
         if plot_type == "Color Map":
             # defaults come from the per-Z preferences in session state
             z_min = c1.number_input("Z min (color)", step=None, format="%g",
@@ -621,12 +677,24 @@ def render_plotdata(session, pid, ov, compact):
         title = (ov["title"] if ov and ov["title"] else None) or \
             st.text_input("Title", value=tl.get("title", ""), key=f"{pid}-title")
         c1, c2 = st.columns(2)
-        xlabel = c1.text_input("X label", value=tl.get("xlabel", x_col),
-                               key=f"{pid}-xlabel")
-        ylabel = c2.text_input("Y label", value=tl.get("ylabel", ""),
-                               key=f"{pid}-ylabel")
+        xlabel = c1.text_input("X label", key=f"{pid}-xlabel")
+        ylabel = c2.text_input("Y label", key=f"{pid}-ylabel")
         if plot_type == "Color Map":
             zlabel = st.text_input("Z label (colorbar)", key=f"{pid}-zlabel")
+
+    # sticky memory: remember the current X / first-Y column's label & range
+    st.session_state[xpref_key] = {
+        "label": st.session_state.get(f"{pid}-xlabel", x_col),
+        "xmin": st.session_state.get(f"{pid}-xmin", np.nan),
+        "xmax": st.session_state.get(f"{pid}-xmax", np.nan),
+    }
+    if y_cols:
+        _yk = y_cols[0]
+        st.session_state[f"{pid}-yprefs-{_yk}"] = {
+            "label": st.session_state.get(f"{pid}-ylabel", ""),
+            "ymin": st.session_state.get(f"{pid}-ymin", np.nan),
+            "ymax": st.session_state.get(f"{pid}-ymax", np.nan),
+        }
 
     if not names or not y_cols:
         st.warning("Pick datasets and Y columns.")
