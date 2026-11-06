@@ -35,6 +35,9 @@ streamlit run streamlit_app.py
   and Download PNG right under it); every setting lives in collapsible
   expanders *below* the plot, so panels line up side by side even when
   the panel types differ.
+- **Plot Data panels** support Line / Scatter / **Color Map** (Z column in
+  color with a colorbar, gridded like `Plot data.py`; regular sweep grids
+  are reshaped exactly, scattered data is interpolated).
 - Polar panels show an **X-slice slider right under the plot** (also in
   multi-column mode). With sync on, dragging it updates the shared X —
   every polar panel scrubs together; with sync off it moves only its own

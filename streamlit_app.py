@@ -109,6 +109,44 @@ def detect_session_type(session):
     return None
 
 
+def _grid_map(xs, ys, zs, res=300):
+    """Grid (x, y, z) data onto a regular grid for Color Map plots.
+
+    Regular measurement grids (every x*y combination present, the common
+    case for sweep maps) are reshaped exactly with no interpolation;
+    scattered data is linearly interpolated (scipy when available, nearest
+    bucketing otherwise). NaN cells stay transparent in the plot.
+    Returns (zi, x_centers, y_centers).
+    """
+    xs = np.asarray(xs, float)
+    ys = np.asarray(ys, float)
+    zs = np.asarray(zs, float)
+    m = np.isfinite(xs) & np.isfinite(ys) & np.isfinite(zs)
+    xs, ys, zs = xs[m], ys[m], zs[m]
+    if xs.size == 0:
+        return np.array([[np.nan]]), np.array([0.0]), np.array([0.0])
+    xu, xi = np.unique(xs, return_inverse=True)
+    yu, yi = np.unique(ys, return_inverse=True)
+    if len(xu) * len(yu) == xs.size:
+        zi = np.full((len(yu), len(xu)), np.nan)
+        zi[yi, xi] = zs
+        return zi, xu, yu
+    gx = np.linspace(xs.min(), xs.max(), res)
+    gy = np.linspace(ys.min(), ys.max(), res)
+    try:
+        from scipy.interpolate import griddata
+        mx, my = np.meshgrid(gx, gy)
+        return griddata((xs, ys), zs, (mx, my), method="linear"), gx, gy
+    except ImportError:
+        pass
+    # numpy fallback: bucket each point into the nearest grid cell
+    zi = np.full((len(gy), len(gx)), np.nan)
+    ix = np.clip(np.searchsorted(gx, xs) - 1, 0, len(gx) - 1)
+    iy = np.clip(np.searchsorted(gy, ys) - 1, 0, len(gy) - 1)
+    zi[iy, ix] = zs
+    return zi, gx, gy
+
+
 if __name__ == "__main__" and "--self-check" in sys.argv:
     # pure helpers only - no widgets, so this runs headless
     assert detect_session_type({"files": []}) == "angular"
@@ -124,6 +162,11 @@ if __name__ == "__main__" and "--self-check" in sys.argv:
     assert detect_angle(r"C:\data\30 deg\75deg.csv") == 30.0
     assert detect_angle(r"C:\data\runs\75deg.csv") == 75.0
     assert opt_index(["a", "b"], "b") == 1 and opt_index(["a"], "z") == 0
+    # color-map gridding: regular grid reshapes exactly, values land in place
+    zi, gx, gy = _grid_map(np.array([0., 1., 0., 1.]), np.array([0., 0., 1., 1.]),
+                           np.array([1., 2., 3., 4.]))
+    assert zi.shape == (2, 2) and zi[0, 0] == 1.0 and zi[0, 1] == 2.0 \
+        and zi[1, 0] == 3.0 and zi[1, 1] == 4.0, zi
     print("streamlit_app self-check OK")
     sys.exit(0)
 
@@ -182,7 +225,8 @@ def shared_settings():
         c4, c5, c6 = st.columns(3)
         direction = c4.selectbox("Polar direction", DIRECTION_OPTS)
         angle_display = c5.selectbox("Angle display", ANGLE_DISPLAY_OPTS)
-        plot_type = c6.selectbox("Plot type (Plot Data)", ["Line", "Scatter"])
+        plot_type = c6.selectbox("Plot type (Plot Data)",
+                                 ["Line", "Scatter", "Color Map"])
         c7, c8, c9, c10 = st.columns(4)
         x_div = c7.number_input("Divide X by", value=1.0, min_value=0.0)
         y_div = c8.number_input("Divide Y by", value=1.0, min_value=0.0)
@@ -454,19 +498,30 @@ def render_plotdata(session, pid, ov, compact):
                                     default=default_y or [cols[-1]],
                                     key=f"{pid}-ycols")
         plot_type = (ov["plot_type"] if ov else None) or st.selectbox(
-            "Plot type", ["Line", "Scatter"], key=f"{pid}-ptype",
-            index=1 if ps.get("plot_type", session.get("plot_type")) == "Scatter" else 0)
+            "Plot type", ["Line", "Scatter", "Color Map"], key=f"{pid}-ptype",
+            index=opt_index(["Line", "Scatter", "Color Map"],
+                            ps.get("plot_type", session.get("plot_type"))))
         x_div = (ov["x_div"] if ov and ov["x_div"] else None) or \
             st.number_input("Divide X by", value=_f(dt.get("x_div")), key=f"{pid}-xdiv")
         y_div = (ov["y_div"] if ov and ov["y_div"] else None) or \
             st.number_input("Divide Y by", value=_f(dt.get("y_div")), key=f"{pid}-ydiv")
+        if plot_type == "Color Map":
+            # Color Map: Z column drives the color, first Y column is the map's Y axis
+            if len(y_cols) > 1:
+                y_cols = y_cols[:1]
+                st.caption("Color Map uses the first Y column as the map's Y axis")
+            z_col = st.selectbox(
+                "Z column (color)", cols, key=f"{pid}-zcol",
+                index=opt_index(cols, sel.get("z_column"), len(cols) - 1))
+            z_div = st.number_input("Divide Z by", value=_f(dt.get("z_div")),
+                                    key=f"{pid}-zdiv")
         color_mode = st.radio("Colors", ["Cycle", "Gradient"], horizontal=True,
                               key=f"{pid}-cmode")
         cmap_name = st.selectbox(
             "Colormap", CMAPS, key=f"{pid}-cmap",
             index=opt_index(CMAPS, ps.get("colormap", session.get("colormap")),
                             CMAPS.index("viridis")),
-            disabled=(color_mode != "Gradient"))
+            disabled=(color_mode != "Gradient" and plot_type != "Color Map"))
         if ov is not None:
             st.caption(f"synced: {plot_type}, divide X by {x_div:g}, "
                        f"Y by {y_div:g}, X log={ov['x_log']}, Y log={ov['y_log']}")
@@ -488,6 +543,11 @@ def render_plotdata(session, pid, ov, compact):
                                 step=None, format="%g", key=f"{pid}-ymin")
         y_max = c2.number_input("Y max", value=_f(ar.get("y_max"), np.nan),
                                 step=None, format="%g", key=f"{pid}-ymax")
+        if plot_type == "Color Map":
+            z_min = c1.number_input("Z min (color)", value=_f(ar.get("z_min"), np.nan),
+                                    step=None, format="%g", key=f"{pid}-zmin")
+            z_max = c2.number_input("Z max (color)", value=_f(ar.get("z_max"), np.nan),
+                                    step=None, format="%g", key=f"{pid}-zmax")
         grid = (ov["grid"] if ov is not None else
                 st.checkbox("Major grid",
                             value=gs.get("show_major_grid", ps.get("show_grid", True)),
@@ -539,9 +599,74 @@ def render_plotdata(session, pid, ov, compact):
                                key=f"{pid}-xlabel")
         ylabel = c2.text_input("Y label", value=tl.get("ylabel", ""),
                                key=f"{pid}-ylabel")
+        if plot_type == "Color Map":
+            zlabel = st.text_input("Z label (colorbar)",
+                                   value=tl.get("zlabel", z_col),
+                                   key=f"{pid}-zlabel")
 
     if not names or not y_cols:
         st.warning("Pick datasets and Y columns.")
+        return
+
+    # ---- Color Map: 2D map of the Z column in color (like 'Plot data.py') ----
+    if plot_type == "Color Map":
+        y_col = y_cols[0]
+        fig, ax = plt.subplots(figsize=(6.2, 5.1) if compact else (9, 5))
+        maps, zvals = [], []
+        for n in names:
+            d = dfs[n]
+            if not all(c in d.columns for c in (x_col, y_col, z_col)):
+                continue
+            xs = pd.to_numeric(d[x_col], errors="coerce").to_numpy(float) / x_div
+            ys = pd.to_numeric(d[y_col], errors="coerce").to_numpy(float) / y_div
+            zs = pd.to_numeric(d[z_col], errors="coerce").to_numpy(float) / z_div
+            zi, gx, gy = _grid_map(xs, ys, zs)
+            maps.append((zi, gx, gy))
+            zvals.append(zs[np.isfinite(zs)])
+        if not maps:
+            st.warning("Color Map: X/Y/Z columns not found in the selected datasets.")
+            plt.close(fig)
+            return
+        zf = np.concatenate(zvals) if zvals else np.array([np.nan])
+        vmin = None if np.isnan(z_min) else z_min
+        vmax = None if np.isnan(z_max) else z_max
+        if np.isfinite(zf).any():
+            if vmin is None:
+                vmin = float(np.min(zf))
+            if vmax is None:
+                vmax = float(np.max(zf))
+        if vmin is not None and vmax is not None and vmax < vmin:
+            vmin, vmax = None, None  # invalid manual range -> auto
+        im = None
+        for zi, gx, gy in maps:
+            im = ax.pcolormesh(gx, gy, zi, shading="nearest",
+                               cmap=plt.get_cmap(cmap_name), vmin=vmin, vmax=vmax)
+        if x_major > 0:
+            ax.xaxis.set_major_locator(plt.MultipleLocator(x_major))
+        if y_major > 0:
+            ax.yaxis.set_major_locator(plt.MultipleLocator(y_major))
+        if not np.isnan(x_min) or not np.isnan(x_max):
+            ax.set_xlim(None if np.isnan(x_min) else x_min,
+                        None if np.isnan(x_max) else x_max)
+        if not np.isnan(y_min) or not np.isnan(y_max):
+            ax.set_ylim(None if np.isnan(y_min) else y_min,
+                        None if np.isnan(y_max) else y_max)
+        if grid:
+            ax.grid(True, alpha=grid_alpha, linestyle=grid_ls,
+                    color="white", linewidth=0.6)
+        ax.set_xlabel(xlabel, fontsize=label_size, family=font_fam)
+        ax.set_ylabel(ylabel, fontsize=label_size, family=font_fam)
+        ax.set_title(title, fontsize=title_size, fontweight='bold', family=font_fam)
+        ax.tick_params(labelsize=tick_size)
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label(zlabel, fontsize=label_size, family=font_fam)
+        cbar.ax.tick_params(labelsize=tick_size)
+        fig.tight_layout()
+        with plot_box:
+            show_fig(fig)
+            download_png(fig, pid)
+            st.caption(f"{len(maps)} color map(s) from {len(names)} dataset(s)")
+        plt.close(fig)
         return
 
     # ---- per-series style table (pre-filled from session styles) ----
