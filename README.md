@@ -31,6 +31,10 @@ streamlit run streamlit_app.py
   independent per-panel settings.
 - Each panel has its own **Download PNG** button; a bad session only
   disables its own panel.
+- **Panel layout:** each panel shows its **plot on top** (X-slice slider
+  and Download PNG right under it); every setting lives in collapsible
+  expanders *below* the plot, so panels line up side by side even when
+  the panel types differ.
 - Polar panels show an **X-slice slider right under the plot** (also in
   multi-column mode). With sync on, dragging it updates the shared X —
   every polar panel scrubs together; with sync off it moves only its own

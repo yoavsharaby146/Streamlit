@@ -218,6 +218,11 @@ def render_angular(session, pid, ov, compact):
         return
     s = session.get("settings", {})
 
+    # the plot renders FIRST in the panel (settings go in collapsible
+    # expanders below it) so panels align side by side regardless of
+    # how many settings they have
+    plot_box = st.container()
+
     def fname(p):
         return p.replace("\\", "/").rsplit("/", 1)[-1]
 
@@ -297,7 +302,6 @@ def render_angular(session, pid, ov, compact):
     if xs_all.size == 0:
         xs_all = np.array([0.0, 1.0])
     lo, hi = float(xs_all.min()), float(xs_all.max())
-    st.caption(f"x range in files ({x_col}): {lo:g} to {hi:g}")
 
     x_text = x_text or f"{(lo + hi) / 2:g}"
     x_targets = [v for v in (t.strip() for t in x_text.split(",")) if v]
@@ -365,7 +369,8 @@ def render_angular(session, pid, ov, compact):
         plotted += 1
 
     if not plotted:
-        st.warning("No points plotted (check angle / include / x settings).")
+        with plot_box:
+            st.warning("No points plotted (check angle / include / x settings).")
         plt.close(fig)
         return
     if len(vals) > 1:
@@ -374,14 +379,16 @@ def render_angular(session, pid, ov, compact):
     if any_clamped:
         ttl += "\nWARNING: x outside range for some file(s), clamped to end value"
     ax.set_title(ttl, fontsize=11, fontweight="bold", pad=20)
-    st.pyplot(fig, width="stretch")
-    # X slider directly under the polar plot: always visible, even in
-    # compact multi-column mode; syncs the shared X when syncing is on
-    if len(vals) == 1 and hi > lo:
-        st.slider("X slice", min_value=lo, max_value=hi,
-                  step=(hi - lo) / 400.0, format="%g", key=f"{pid}-xslider",
-                  on_change=_x_slider_changed, args=(pid,))
-    download_png(fig, pid)
+    with plot_box:
+        st.pyplot(fig, width="stretch")
+        st.caption(f"x range in files ({x_col}): {lo:g} to {hi:g}")
+        # X slice slider under the plot: dragging it updates the shared X
+        # when syncing (all panels scrub together), else only this panel
+        if len(vals) == 1 and hi > lo:
+            st.slider("X slice", min_value=lo, max_value=hi,
+                      step=(hi - lo) / 400.0, format="%g", key=f"{pid}-xslider",
+                      on_change=_x_slider_changed, args=(pid,))
+        download_png(fig, pid)
     plt.close(fig)
 
 
@@ -404,6 +411,10 @@ def render_plotdata(session, pid, ov, compact):
 
     dfs = {name: pd.DataFrame(d["data"], columns=d["columns"])
            for name, d in datasets.items()}
+
+    # the plot renders FIRST in the panel; all settings live in
+    # collapsible expanders below it so panels align side by side
+    plot_box = st.container()
 
     # ---- data & transform ----
     with st.expander("Data & transform", expanded=not compact):
@@ -497,11 +508,14 @@ def render_plotdata(session, pid, ov, compact):
             index=opt_index(list(LEGEND_POS),
                             ls.get("position", "Best").lower().replace("_", " ")))
 
-    title = (ov["title"] if ov and ov["title"] else None) or \
-        st.text_input("Title", value=tl.get("title", ""), key=f"{pid}-title")
-    c1, c2 = st.columns(2)
-    xlabel = c1.text_input("X label", value=tl.get("xlabel", x_col), key=f"{pid}-xlabel")
-    ylabel = c2.text_input("Y label", value=tl.get("ylabel", ""), key=f"{pid}-ylabel")
+    with st.expander("Title & axis labels", expanded=not compact):
+        title = (ov["title"] if ov and ov["title"] else None) or \
+            st.text_input("Title", value=tl.get("title", ""), key=f"{pid}-title")
+        c1, c2 = st.columns(2)
+        xlabel = c1.text_input("X label", value=tl.get("xlabel", x_col),
+                               key=f"{pid}-xlabel")
+        ylabel = c2.text_input("Y label", value=tl.get("ylabel", ""),
+                               key=f"{pid}-ylabel")
 
     if not names or not y_cols:
         st.warning("Pick datasets and Y columns.")
@@ -509,24 +523,26 @@ def render_plotdata(session, pid, ov, compact):
 
     # ---- per-series style table (pre-filled from session styles) ----
     series = [(n, y) for n in names for y in y_cols if y in dfs[n].columns]
-    st.subheader("Series styles (edit color / width / linestyle / label)")
-    style_rows = []
-    for n, y in series:
-        stl = styles.get(f"{n}|||{y}", {})
-        style_rows.append({
-            "series": f"{n}: {y}",
-            "label": stl.get("legend", f"{n}: {y}"),
-            "color": stl.get("color", ""),
-            "width": _f(stl.get("width"), 2.0),
-            "linestyle": stl.get("linestyle", "-") or "-",
-        })
-    # key includes a signature of the series list: a fresh key when the
-    # series selection changes avoids stale data_editor state
-    sig = hashlib.md5("|".join(f"{n}|||{y}" for n, y in series).encode()).hexdigest()[:8]
-    style_ed = st.data_editor(pd.DataFrame(style_rows), hide_index=True,
-                              key=f"{pid}-style-{sig}")
+    with st.expander("Series styles (edit color / width / linestyle / label)",
+                     expanded=not compact):
+        style_rows = []
+        for n, y in series:
+            stl = styles.get(f"{n}|||{y}", {})
+            style_rows.append({
+                "series": f"{n}: {y}",
+                "label": stl.get("legend", f"{n}: {y}"),
+                "color": stl.get("color", ""),
+                "width": _f(stl.get("width"), 2.0),
+                "linestyle": stl.get("linestyle", "-") or "-",
+            })
+        # key includes a signature of the series list: a fresh key when the
+        # series selection changes avoids stale data_editor state
+        sig = hashlib.md5("|".join(f"{n}|||{y}" for n, y in series).encode()).hexdigest()[:8]
+        style_ed = st.data_editor(pd.DataFrame(style_rows), hide_index=True,
+                                  key=f"{pid}-style-{sig}")
 
-    fig, ax = plt.subplots(figsize=(7, 4.2) if compact else (9, 5))
+    # same aspect as the polar panels in compact mode -> equal heights
+    fig, ax = plt.subplots(figsize=(6.2, 5.6) if compact else (9, 5))
     if color_mode == "Gradient" and series:
         cmap = plt.get_cmap(cmap_name)
         colors = [cmap(v) for v in np.linspace(0, 1, len(series))] \
@@ -576,10 +592,11 @@ def render_plotdata(session, pid, ov, compact):
     if show_legend and series:
         ax.legend(fontsize=leg_size, loc=LEGEND_POS[leg_pos], ncol=int(leg_cols))
 
-    st.pyplot(fig, width="stretch")
-    download_png(fig, pid)
+    with plot_box:
+        st.pyplot(fig, width="stretch")
+        download_png(fig, pid)
+        st.caption(f"{len(series)} series from {len(names)} dataset(s)")
     plt.close(fig)
-    st.caption(f"{len(series)} series from {len(names)} dataset(s)")
 
 # ==================== main ====================
 st.set_page_config(page_title="Session Plotter", layout="wide")
