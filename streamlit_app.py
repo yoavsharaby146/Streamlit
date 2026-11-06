@@ -273,6 +273,16 @@ def _x_slider_changed(pid):
         st.session_state[f"{pid}-xval"] = text
 
 
+def _z_col_changed(pid):
+    """Color Map Z column changed: swap in that column's remembered
+    colorbar label and Z color range, so switching Z is smooth."""
+    zc = st.session_state[f"{pid}-zcol"]
+    p = st.session_state.get(f"{pid}-zprefs-{zc}") or {}
+    st.session_state[f"{pid}-zlabel"] = p.get("label", zc)
+    st.session_state[f"{pid}-zmin"] = p.get("zmin", np.nan)
+    st.session_state[f"{pid}-zmax"] = p.get("zmax", np.nan)
+
+
 # ==================== Angular Polar panel ====================
 def render_angular(session, pid, ov, compact):
     files = session.get("files", [])
@@ -512,7 +522,22 @@ def render_plotdata(session, pid, ov, compact):
                 st.caption("Color Map uses the first Y column as the map's Y axis")
             z_col = st.selectbox(
                 "Z column (color)", cols, key=f"{pid}-zcol",
-                index=opt_index(cols, sel.get("z_column"), len(cols) - 1))
+                index=opt_index(cols, sel.get("z_column"), len(cols) - 1),
+                on_change=_z_col_changed, args=(pid,))
+            # per-Z sticky settings: every Z column remembers its own
+            # colorbar label and color range; switching Z swaps them in
+            zpref_key = f"{pid}-zprefs-{z_col}"
+            if st.session_state.get(zpref_key) is None:
+                z0 = sel.get("z_column")
+                st.session_state[zpref_key] = {
+                    "label": tl.get("zlabel", z_col) if z_col == z0 else z_col,
+                    "zmin": _f(ar.get("z_min"), np.nan) if z_col == z0 else np.nan,
+                    "zmax": _f(ar.get("z_max"), np.nan) if z_col == z0 else np.nan,
+                }
+            for _wk, _pk in ((f"{pid}-zlabel", "label"), (f"{pid}-zmin", "zmin"),
+                             (f"{pid}-zmax", "zmax")):
+                if _wk not in st.session_state:
+                    st.session_state[_wk] = st.session_state[zpref_key][_pk]
             z_div = st.number_input("Divide Z by", value=_f(dt.get("z_div")),
                                     key=f"{pid}-zdiv")
         color_mode = st.radio("Colors", ["Cycle", "Gradient"], horizontal=True,
@@ -544,10 +569,11 @@ def render_plotdata(session, pid, ov, compact):
         y_max = c2.number_input("Y max", value=_f(ar.get("y_max"), np.nan),
                                 step=None, format="%g", key=f"{pid}-ymax")
         if plot_type == "Color Map":
-            z_min = c1.number_input("Z min (color)", value=_f(ar.get("z_min"), np.nan),
-                                    step=None, format="%g", key=f"{pid}-zmin")
-            z_max = c2.number_input("Z max (color)", value=_f(ar.get("z_max"), np.nan),
-                                    step=None, format="%g", key=f"{pid}-zmax")
+            # defaults come from the per-Z preferences in session state
+            z_min = c1.number_input("Z min (color)", step=None, format="%g",
+                                    key=f"{pid}-zmin")
+            z_max = c2.number_input("Z max (color)", step=None, format="%g",
+                                    key=f"{pid}-zmax")
         grid = (ov["grid"] if ov is not None else
                 st.checkbox("Major grid",
                             value=gs.get("show_major_grid", ps.get("show_grid", True)),
@@ -600,9 +626,7 @@ def render_plotdata(session, pid, ov, compact):
         ylabel = c2.text_input("Y label", value=tl.get("ylabel", ""),
                                key=f"{pid}-ylabel")
         if plot_type == "Color Map":
-            zlabel = st.text_input("Z label (colorbar)",
-                                   value=tl.get("zlabel", z_col),
-                                   key=f"{pid}-zlabel")
+            zlabel = st.text_input("Z label (colorbar)", key=f"{pid}-zlabel")
 
     if not names or not y_cols:
         st.warning("Pick datasets and Y columns.")
@@ -611,6 +635,13 @@ def render_plotdata(session, pid, ov, compact):
     # ---- Color Map: 2D map of the Z column in color (like 'Plot data.py') ----
     if plot_type == "Color Map":
         y_col = y_cols[0]
+        # remember this Z column's current label / color range so that
+        # switching Z and coming back restores them
+        st.session_state[zpref_key] = {
+            "label": st.session_state.get(f"{pid}-zlabel", z_col),
+            "zmin": st.session_state.get(f"{pid}-zmin", np.nan),
+            "zmax": st.session_state.get(f"{pid}-zmax", np.nan),
+        }
         fig, ax = plt.subplots(figsize=(6.2, 5.1) if compact else (9, 5))
         maps, zvals = [], []
         for n in names:
