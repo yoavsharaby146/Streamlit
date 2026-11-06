@@ -2,11 +2,19 @@
 
 Loads the JSON session files written by 'Plot data.py' and
 'angular polar.py' and reproduces their core plotting features.
+Several session files can be loaded together (sidebar multi-upload, or
+?session=path/a.json;path/b.json in the URL) and shown side by side
+for visual comparison, with optional shared settings synced across
+all panels.
+
 Run:  streamlit run streamlit_app.py
 """
+import hashlib
+import io
 import json
 import os
 import re
+import sys
 
 import numpy as np
 import pandas as pd
@@ -18,6 +26,30 @@ import matplotlib.pyplot as plt
 # ==================== shared helpers (same logic as the Tk apps) ====================
 ANGLE_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*(?:deg|°)", re.IGNORECASE)
 ANY_NUM_RE = re.compile(r"(-?\d+(?:\.\d+)?)")
+
+THETA_ZERO_OPTS = ["N (top)", "E (0 deg, standard)", "W", "S"]
+THETA_ZERO_MAP = {"E (0 deg, standard)": "E", "N (top)": "N", "W": "W", "S": "S"}
+DIRECTION_OPTS = ["Counter-clockwise", "Clockwise"]
+MARKER_OPTS = ["o", "s", "^", "D", "x", "+", "*", "None"]
+ANGLE_DISPLAY_OPTS = ["0 to 360", "-180 to 180", "-90 to 90"]
+SLICE_MODES = ["Linear interpolation", "Nearest row"]
+LEGEND_POS = {"best": "best", "upper right": "upper right",
+              "upper left": "upper left", "lower right": "lower right",
+              "lower left": "lower left", "outside right": "center left"}
+CMAPS = ["viridis", "plasma", "inferno", "magma", "turbo", "jet"]
+TYPE_LABEL = {"angular": "Angular Polar", "plotdata": "Plot Data"}
+
+
+def _f(v, default=1.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def opt_index(opts, value, default=0):
+    """Index of value in opts (safe against values saved by other apps)."""
+    return opts.index(value) if value in opts else default
 
 
 def detect_angle_from_name(name):
@@ -59,17 +91,119 @@ def format_angle_deg(deg, mode="0 to 360"):
     return deg
 
 
-THETA_ZERO_MAP = {"E (0 deg, standard)": "E", "N (top)": "N", "W": "W", "S": "S"}
+def detect_session_type(session):
+    """'angular' | 'plotdata' | None, from the session's top-level keys."""
+    if not isinstance(session, dict):
+        return None
+    if "files" in session:
+        return "angular"
+    if "datasets" in session:
+        return "plotdata"
+    return None
 
 
-def angular_polar_view(session):
+if __name__ == "__main__" and "--self-check" in sys.argv:
+    # pure helpers only - no widgets, so this runs headless
+    assert detect_session_type({"files": []}) == "angular"
+    assert detect_session_type({"datasets": {}}) == "plotdata"
+    assert detect_session_type({"foo": 1}) is None
+    assert detect_session_type(["not", "a", "dict"]) is None
+    assert value_at_x([0, 10, 20, 30], [1, 3, 5, 7], 15) == 4.0
+    assert value_at_x([30, 0, 20, 10], [7, 1, 5, 3], 15) == 4.0
+    assert value_at_x([0, 10, 20], [1, 3, 5], 19, "Nearest row") == 5
+    assert format_angle_deg(270, "-180 to 180") == -90.0
+    assert format_angle_deg(135, "-90 to 90") == -45.0
+    assert detect_angle_from_name("sample_30deg.csv") == 30.0
+    assert detect_angle(r"C:\data\30 deg\75deg.csv") == 30.0
+    assert detect_angle(r"C:\data\runs\75deg.csv") == 75.0
+    assert opt_index(["a", "b"], "b") == 1 and opt_index(["a"], "z") == 0
+    print("streamlit_app self-check OK")
+    sys.exit(0)
+
+# ==================== session loading ====================
+def collect_sessions():
+    """Gather (name, type, session) panels from multi-upload + ?session= URLs."""
+    raw = []  # (name, parsed-or-None)
+    ups = st.sidebar.file_uploader("Session JSON(s)", type="json",
+                                   accept_multiple_files=True)
+    for f in ups or []:
+        try:
+            raw.append((f.name, json.load(f)))
+        except Exception as e:
+            st.sidebar.error(f"{f.name}: bad JSON ({e})")
+    # ?session=a.json;b.json in the URL (each entry may itself be a
+    # ';'-separated list, and the param may be repeated)
+    for qval in st.query_params.get_all("session"):
+        for q in (p.strip() for p in qval.split(";")):
+            if not q:
+                continue
+            if not os.path.isfile(q):
+                st.sidebar.warning(f"session file not found: {q}")
+                continue
+            try:
+                with open(q, "r", encoding="utf-8") as fh:
+                    raw.append((os.path.basename(q), json.load(fh)))
+            except Exception as e:
+                st.sidebar.error(f"{q}: bad session ({e})")
+
+    panels = []
+    for name, s in raw:
+        t = detect_session_type(s)
+        if t is None:
+            st.sidebar.error(f"{name}: unknown session format "
+                             "(needs a 'files' or 'datasets' key)")
+        else:
+            panels.append({"name": name, "type": t, "session": s})
+    return panels
+
+
+def shared_settings():
+    """One control block whose values are applied to every panel.
+    Blank text fields mean 'keep each panel's own choice'."""
+    with st.expander("Shared settings — applied to every panel", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        x_col = c1.text_input("X column",
+                              help="Applied where the column exists; blank = per panel")
+        y_col = c2.text_input("Y column",
+                              help="First Y for Plot Data; blank = per panel")
+        title = c3.text_input("Title", help="Overrides every panel title; blank = per panel")
+        x_text = c1.text_input("X value(s) — polar slices",
+                               help="e.g. 5 or 2, 5, 8; blank = per panel")
+        slice_mode = c2.selectbox("Polar slice mode", SLICE_MODES)
+        theta_zero = c3.selectbox("Polar theta zero", THETA_ZERO_OPTS)
+        c4, c5, c6 = st.columns(3)
+        direction = c4.selectbox("Polar direction", DIRECTION_OPTS)
+        angle_display = c5.selectbox("Angle display", ANGLE_DISPLAY_OPTS)
+        plot_type = c6.selectbox("Plot type (Plot Data)", ["Line", "Scatter"])
+        c7, c8, c9, c10 = st.columns(4)
+        x_div = c7.number_input("Divide X by", value=1.0, min_value=0.0)
+        y_div = c8.number_input("Divide Y by", value=1.0, min_value=0.0)
+        x_log = c9.checkbox("X log")
+        y_log = c10.checkbox("Y log")
+        grid = st.checkbox("Grid on (Plot Data)", value=True)
+    return {"x_col": x_col or None, "y_col": y_col or None,
+            "title": title or None, "x_text": x_text or None,
+            "slice_mode": slice_mode, "theta_zero": theta_zero,
+            "direction": direction, "angle_display": angle_display,
+            "plot_type": plot_type, "x_div": x_div or None, "y_div": y_div or None,
+            "x_log": x_log, "y_log": y_log, "grid": grid}
+
+
+def download_png(fig, pid):
+    """Small per-panel PNG export button."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
+    st.download_button("Download PNG", buf.getvalue(), file_name=f"{pid}.png",
+                       mime="image/png", key=f"{pid}-dl")
+
+# ==================== Angular Polar panel ====================
+def render_angular(session, pid, ov, compact):
     files = session.get("files", [])
     if not files:
         st.warning("No files inside this session.")
         return
     s = session.get("settings", {})
 
-    # editable angle table
     def fname(p):
         return p.replace("\\", "/").rsplit("/", 1)[-1]
 
@@ -79,72 +213,95 @@ def angular_polar_view(session):
                   for f in files],
         "file": [fname(f.get("path", "?")) for f in files],
     })
-    st.subheader("Files & angles (edit angle / untick include)")
-    edited = st.data_editor(rows, key="angle_table", hide_index=True)
+    with st.expander("Files & angles (edit angle / untick include)",
+                     expanded=not compact):
+        edited = st.data_editor(rows, hide_index=True, key=f"{pid}-angle_table")
 
     dfs = [pd.DataFrame(f["rows"], columns=f["columns"]) for f in files]
     cols = list(dfs[0].columns)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        x_col = st.selectbox("X column", cols,
-                             index=cols.index(s["x_col"]) if s.get("x_col") in cols
-                             else min(1, len(cols) - 1))
-    with c2:
-        y_col = st.selectbox("Y column", cols,
-                             index=cols.index(s["y_col"]) if s.get("y_col") in cols
-                             else len(cols) - 1)
+    def pick(shared, saved, fallback):
+        for v in (shared, saved):
+            if v in cols:
+                return v
+        return fallback
+
+    if ov is not None:
+        # synced: shared values override; missing columns fall back per panel
+        x_col = pick(ov["x_col"], s.get("x_col"), cols[min(1, len(cols) - 1)])
+        y_col = pick(ov["y_col"], s.get("y_col"), cols[-1])
+        x_text = ov["x_text"] or s.get("x_val", "")
+        slice_mode = ov["slice_mode"]
+        theta_zero = ov["theta_zero"]
+        direction = ov["direction"]
+        angle_display = ov["angle_display"]
+        marker = s.get("marker", "o") if s.get("marker") in MARKER_OPTS else "o"
+        connect = s.get("connect", True)
+        close = s.get("close", False)
+        r_offset = s.get("r_offset", False)
+        angle_labels = s.get("angle_labels", True)
+        title = ov["title"] or s.get("title", "Angular Dependence")
+    else:
+        with st.expander("Polar settings", expanded=not compact):
+            c1, c2 = st.columns(2)
+            x_col = c1.selectbox(
+                "X column", cols, key=f"{pid}-xcol",
+                index=opt_index(cols, s.get("x_col"), min(1, len(cols) - 1)))
+            y_col = c2.selectbox(
+                "Y column", cols, key=f"{pid}-ycol",
+                index=opt_index(cols, s.get("y_col"), len(cols) - 1))
+            x_text = st.text_input("X value(s), comma-separated for several",
+                                   value=s.get("x_val", ""), key=f"{pid}-xval")
+            slice_mode = st.radio("Slice mode", SLICE_MODES, horizontal=True,
+                                  key=f"{pid}-slice",
+                                  index=opt_index(SLICE_MODES, s.get("slice_mode")))
+            c1, c2, c3 = st.columns(3)
+            theta_zero = c1.selectbox("Theta zero", THETA_ZERO_OPTS, key=f"{pid}-tz",
+                                      index=opt_index(THETA_ZERO_OPTS, s.get("theta_zero")))
+            direction = c2.selectbox("Direction", DIRECTION_OPTS, key=f"{pid}-dir",
+                                     index=opt_index(DIRECTION_OPTS, s.get("direction")))
+            marker = c3.selectbox("Marker", MARKER_OPTS, key=f"{pid}-mk",
+                                  index=opt_index(MARKER_OPTS, s.get("marker")))
+            angle_display = c1.selectbox("Angle display", ANGLE_DISPLAY_OPTS,
+                                         key=f"{pid}-adisp",
+                                         index=opt_index(ANGLE_DISPLAY_OPTS,
+                                                         s.get("angle_display")))
+            connect = c2.checkbox("Connect", value=s.get("connect", True),
+                                  key=f"{pid}-conn")
+            close = c3.checkbox("Close circle", value=s.get("close", False),
+                                key=f"{pid}-close")
+            r_offset = c1.checkbox("Offset R", value=s.get("r_offset", False),
+                                   key=f"{pid}-roff")
+            angle_labels = c2.checkbox("Angle labels",
+                                       value=s.get("angle_labels", True),
+                                       key=f"{pid}-alab")
+            title = st.text_input("Title", value=s.get("title", "Angular Dependence"),
+                                  key=f"{pid}-title")
 
     xs_all = np.concatenate([pd.to_numeric(d[x_col], errors="coerce").dropna().values
-                             for d in dfs])
+                             for d in dfs]) if dfs else np.array([0.0, 1.0])
+    if xs_all.size == 0:
+        xs_all = np.array([0.0, 1.0])
     lo, hi = float(xs_all.min()), float(xs_all.max())
-    st.caption(f"x range in files: {lo:g} to {hi:g}")
+    st.caption(f"x range in files ({x_col}): {lo:g} to {hi:g}")
 
-    x_text = st.text_input("X value(s), comma-separated for several",
-                           value=s.get("x_val", f"{(lo + hi) / 2:g}"))
-    slice_mode = st.radio("Slice mode", ["Linear interpolation", "Nearest row"],
-                          index=0 if s.get("slice_mode") != "Nearest row" else 1,
-                          horizontal=True)
-
-    x_targets = [v for v in [t.strip() for t in x_text.split(",")] if v]
+    x_text = x_text or f"{(lo + hi) / 2:g}"
+    x_targets = [v for v in (t.strip() for t in x_text.split(",")) if v]
     try:
         vals = [float(v) for v in x_targets]
     except ValueError:
         st.error("X value(s) must be numbers, e.g. 5 or 2, 5, 8")
         return
-    if len(vals) == 1:
+    if len(vals) == 1 and ov is None:
         new = st.slider("X slider", min_value=lo, max_value=hi,
                         value=min(max(vals[0], lo), hi),
-                        step=(hi - lo) / 400.0, format="%g")
+                        step=(hi - lo) / 400.0, format="%g", key=f"{pid}-slider")
         if abs(new - vals[0]) > 1e-12:
             vals = [new]
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        theta_zero = st.selectbox(
-            "Theta zero", ["N (top)", "E (0 deg, standard)", "W", "S"],
-            index=["N (top)", "E (0 deg, standard)", "W", "S"].index(
-                s.get("theta_zero", "N (top)")))
-        direction = st.selectbox("Direction", ["Counter-clockwise", "Clockwise"],
-                                 index=0 if s.get("direction") != "Clockwise" else 1)
-    with c2:
-        marker = st.selectbox("Marker", ["o", "s", "^", "D", "x", "+", "*", "None"],
-                              index=["o", "s", "^", "D", "x", "+", "*", "None"].index(
-                                  s.get("marker", "o")))
-        angle_display = st.selectbox(
-            "Angle display", ["0 to 360", "-180 to 180", "-90 to 90"],
-            index=["0 to 360", "-180 to 180", "-90 to 90"].index(
-                s.get("angle_display", "0 to 360")))
-    with c3:
-        connect = st.checkbox("Connect points", value=s.get("connect", True))
-        close = st.checkbox("Close circle", value=s.get("close", False))
-        r_offset = st.checkbox("Offset R", value=s.get("r_offset", False))
-        angle_labels = st.checkbox("Angle labels", value=s.get("angle_labels", True))
-
-    title = st.text_input("Title", value=s.get("title", "Angular Dependence"))
-
     # ---- plot ----
-    fig, ax = plt.subplots(figsize=(7, 6), subplot_kw=dict(projection="polar"))
+    fig, ax = plt.subplots(figsize=(6.2, 5.6) if compact else (7, 6),
+                           subplot_kw=dict(projection="polar"))
     ax.set_theta_zero_location(THETA_ZERO_MAP.get(theta_zero, "N"))
     ax.set_theta_direction(-1 if direction == "Clockwise" else 1)
     tick_degs = np.arange(0, 360, 30)
@@ -203,24 +360,13 @@ def angular_polar_view(session):
     if any_clamped:
         ttl += "\nWARNING: x outside range for some file(s), clamped to end value"
     ax.set_title(ttl, fontsize=11, fontweight="bold", pad=20)
-    st.pyplot(fig)
+    st.pyplot(fig, width="stretch")
+    download_png(fig, pid)
     plt.close(fig)
 
 
-# ------------------------------------------------ Plot Data mode
-LEGEND_POS = {"best": "best", "upper right": "upper right",
-              "upper left": "upper left", "lower right": "lower right",
-              "lower left": "lower left", "outside right": "center left"}
-
-
-def _f(v, default=1.0):
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return default
-
-
-def plot_data_view(session):
+# ==================== Plot Data panel ====================
+def render_plotdata(session, pid, ov, compact):
     datasets = session.get("datasets", {})
     if not datasets:
         st.warning("No datasets inside this session.")
@@ -239,81 +385,103 @@ def plot_data_view(session):
     dfs = {name: pd.DataFrame(d["data"], columns=d["columns"])
            for name, d in datasets.items()}
 
-    with st.sidebar:
-        names = st.multiselect("Datasets", list(dfs), default=list(dfs))
+    # ---- data & transform ----
+    with st.expander("Data & transform", expanded=not compact):
+        names = st.multiselect("Datasets", list(dfs), default=list(dfs),
+                               key=f"{pid}-names")
         ref = dfs[names[0]] if names else next(iter(dfs.values()))
         cols = list(ref.columns)
-        x_col = st.selectbox("X column", cols,
-                             index=cols.index(sel["x_column"])
-                             if sel.get("x_column") in cols else 0)
+        x_col = (ov["x_col"] if ov and ov["x_col"] in cols else
+                 st.selectbox("X column", cols, key=f"{pid}-xcol",
+                              index=opt_index(cols, sel.get("x_column"), 0)))
         default_y = [c for c in sel.get("y_column", []) if c in cols]
-        y_cols = st.multiselect("Y columns", cols,
-                                default=default_y or [cols[-1]])
-        plot_type = st.selectbox("Plot type", ["Line", "Scatter"],
-                                 index=1 if ps.get("plot_type",
-                                                   session.get("plot_type")) == "Scatter" else 0)
-        x_div = st.number_input("Divide X by", value=_f(dt.get("x_div")))
-        y_div = st.number_input("Divide Y by", value=_f(dt.get("y_div")))
-        color_mode = st.radio("Colors", ["Cycle", "Gradient"], horizontal=True)
-        cmap_name = st.selectbox("Colormap",
-                                 ["viridis", "plasma", "inferno", "magma", "turbo", "jet"],
+        if ov and ov["y_col"] in cols:
+            y_cols = [ov["y_col"]]
+        else:
+            y_cols = st.multiselect("Y columns", cols,
+                                    default=default_y or [cols[-1]],
+                                    key=f"{pid}-ycols")
+        plot_type = (ov["plot_type"] if ov else None) or st.selectbox(
+            "Plot type", ["Line", "Scatter"], key=f"{pid}-ptype",
+            index=1 if ps.get("plot_type", session.get("plot_type")) == "Scatter" else 0)
+        x_div = (ov["x_div"] if ov and ov["x_div"] else None) or \
+            st.number_input("Divide X by", value=_f(dt.get("x_div")), key=f"{pid}-xdiv")
+        y_div = (ov["y_div"] if ov and ov["y_div"] else None) or \
+            st.number_input("Divide Y by", value=_f(dt.get("y_div")), key=f"{pid}-ydiv")
+        color_mode = st.radio("Colors", ["Cycle", "Gradient"], horizontal=True,
+                              key=f"{pid}-cmode")
+        cmap_name = st.selectbox("Colormap", CMAPS, key=f"{pid}-cmap",
                                  disabled=(color_mode != "Gradient"))
-        c1, c2 = st.columns(2)
-        x_log = c1.checkbox("X log", value=ps.get("x_log", False))
-        y_log = c2.checkbox("Y log", value=ps.get("y_log", False))
-
-        with st.expander("Axes & grid"):
+        if ov is not None:
+            st.caption(f"synced: {plot_type}, divide X by {x_div:g}, "
+                       f"Y by {y_div:g}, X log={ov['x_log']}, Y log={ov['y_log']}")
+        else:
             c1, c2 = st.columns(2)
-            x_min = c1.number_input("X min", value=_f(ar.get("x_min"), np.nan),
-                                    step=None, format="%g")
-            x_max = c2.number_input("X max", value=_f(ar.get("x_max"), np.nan),
-                                    step=None, format="%g")
-            y_min = c1.number_input("Y min", value=_f(ar.get("y_min"), np.nan),
-                                    step=None, format="%g")
-            y_max = c2.number_input("Y max", value=_f(ar.get("y_max"), np.nan),
-                                    step=None, format="%g")
-            grid = st.checkbox("Major grid", value=gs.get("show_major_grid",
-                                                          ps.get("show_grid", True)))
-            grid_alpha = st.slider("Grid alpha", 0.0, 1.0,
-                                   value=_f(gs.get("grid_alpha"), 0.3))
-            grid_ls = st.selectbox("Grid linestyle", ["-", "--", ":", "-."],
-                                   index=["-", "--", ":", "-."].index(
-                                       gs.get("grid_linestyle", "-")
-                                       if gs.get("grid_linestyle", "-") in
-                                       ["-", "--", ":", "-."] else "-"))
-            x_major = c1.number_input("X major tick (0=auto)",
-                                      value=_f(ts.get("x_maj"), 0.0), min_value=0.0,
-                                      format="%g")
-            y_major = c2.number_input("Y major tick (0=auto)",
-                                      value=_f(ts.get("y_maj"), 0.0), min_value=0.0,
-                                      format="%g")
+            x_log = c1.checkbox("X log", value=ps.get("x_log", False), key=f"{pid}-xlog")
+            y_log = c2.checkbox("Y log", value=ps.get("y_log", False), key=f"{pid}-ylog")
+    if ov is not None:
+        x_log, y_log = ov["x_log"], ov["y_log"]
 
-        with st.expander("Fonts & legend"):
-            font_fam = st.selectbox("Font", ["Arial", "DejaVu Sans", "Calibri",
-                                             "Times New Roman", "Consolas"])
-            title_size = st.number_input("Title size", 8, 30,
-                                         value=int(_f(fs.get("title_size"), 12)))
-            label_size = st.number_input("Label size", 8, 30,
-                                         value=int(_f(fs.get("label_size"), 11)))
-            tick_size = st.number_input("Tick size", 6, 30,
-                                        value=int(_f(fs.get("xtick_size"), 10)))
-            leg_size = st.number_input("Legend size", 6, 30,
-                                       value=int(_f(ls.get("legend_size"), 10)))
-            leg_cols = st.number_input("Legend columns", 1, 6,
-                                       value=int(_f(ls.get("columns"), 1)))
-            show_legend = st.checkbox("Show legend",
-                                      value=ls.get("show_legend", True))
-            leg_pos = st.selectbox(
-                "Legend position", list(LEGEND_POS),
-                index=list(LEGEND_POS).index(
-                    ls.get("position", "Best").lower().replace("_", " "))
-                if ls.get("position", "Best").lower().replace("_", " ")
-                in LEGEND_POS else 0)
+    # ---- axes, grid & ticks ----
+    with st.expander("Axes, grid & ticks"):
+        c1, c2 = st.columns(2)
+        x_min = c1.number_input("X min", value=_f(ar.get("x_min"), np.nan),
+                                step=None, format="%g", key=f"{pid}-xmin")
+        x_max = c2.number_input("X max", value=_f(ar.get("x_max"), np.nan),
+                                step=None, format="%g", key=f"{pid}-xmax")
+        y_min = c1.number_input("Y min", value=_f(ar.get("y_min"), np.nan),
+                                step=None, format="%g", key=f"{pid}-ymin")
+        y_max = c2.number_input("Y max", value=_f(ar.get("y_max"), np.nan),
+                                step=None, format="%g", key=f"{pid}-ymax")
+        grid = (ov["grid"] if ov is not None else
+                st.checkbox("Major grid",
+                            value=gs.get("show_major_grid", ps.get("show_grid", True)),
+                            key=f"{pid}-grid"))
+        grid_alpha = st.slider("Grid alpha", 0.0, 1.0,
+                               value=_f(gs.get("grid_alpha"), 0.3), key=f"{pid}-galpha")
+        grid_ls = st.selectbox("Grid linestyle", ["-", "--", ":", "-."],
+                               key=f"{pid}-gls",
+                               index=opt_index(["-", "--", ":", "-."],
+                                               gs.get("grid_linestyle", "-")))
+        x_major = c1.number_input("X major tick (0=auto)",
+                                  value=_f(ts.get("x_maj"), 0.0), min_value=0.0,
+                                  format="%g", key=f"{pid}-xmaj")
+        y_major = c2.number_input("Y major tick (0=auto)",
+                                  value=_f(ts.get("y_maj"), 0.0), min_value=0.0,
+                                  format="%g", key=f"{pid}-ymaj")
 
-    title = st.text_input("Title", value=tl.get("title", ""))
+    # ---- fonts & legend ----
+    with st.expander("Fonts & legend"):
+        font_fam = st.selectbox("Font", ["Arial", "DejaVu Sans", "Calibri",
+                                         "Times New Roman", "Consolas"],
+                                key=f"{pid}-font")
+        title_size = st.number_input("Title size", 8, 30,
+                                     value=int(_f(fs.get("title_size"), 12)),
+                                     key=f"{pid}-tsize")
+        label_size = st.number_input("Label size", 8, 30,
+                                     value=int(_f(fs.get("label_size"), 11)),
+                                     key=f"{pid}-lsize")
+        tick_size = st.number_input("Tick size", 6, 30,
+                                    value=int(_f(fs.get("xtick_size"), 10)),
+                                    key=f"{pid}-tick")
+        leg_size = st.number_input("Legend size", 6, 30,
+                                   value=int(_f(ls.get("legend_size"), 10)),
+                                   key=f"{pid}-legsize")
+        leg_cols = st.number_input("Legend columns", 1, 6,
+                                   value=int(_f(ls.get("columns"), 1)),
+                                   key=f"{pid}-legcols")
+        show_legend = st.checkbox("Show legend", value=ls.get("show_legend", True),
+                                  key=f"{pid}-legshow")
+        leg_pos = st.selectbox(
+            "Legend position", list(LEGEND_POS), key=f"{pid}-legpos",
+            index=opt_index(list(LEGEND_POS),
+                            ls.get("position", "Best").lower().replace("_", " ")))
+
+    title = (ov["title"] if ov and ov["title"] else None) or \
+        st.text_input("Title", value=tl.get("title", ""), key=f"{pid}-title")
     c1, c2 = st.columns(2)
-    xlabel = c1.text_input("X label", value=tl.get("xlabel", x_col))
-    ylabel = c2.text_input("Y label", value=tl.get("ylabel", ""))
+    xlabel = c1.text_input("X label", value=tl.get("xlabel", x_col), key=f"{pid}-xlabel")
+    ylabel = c2.text_input("Y label", value=tl.get("ylabel", ""), key=f"{pid}-ylabel")
 
     if not names or not y_cols:
         st.warning("Pick datasets and Y columns.")
@@ -332,13 +500,13 @@ def plot_data_view(session):
             "width": _f(stl.get("width"), 2.0),
             "linestyle": stl.get("linestyle", "-") or "-",
         })
-    style_df = pd.DataFrame(style_rows)
-    style_ed = st.data_editor(style_df, hide_index=True, key="style_table") \
-        if len(style_rows) != 1 else style_df
-    if len(style_rows) == 1:
-        st.caption("single series - style via color mode / dividers above")
+    # key includes a signature of the series list: a fresh key when the
+    # series selection changes avoids stale data_editor state
+    sig = hashlib.md5("|".join(f"{n}|||{y}" for n, y in series).encode()).hexdigest()[:8]
+    style_ed = st.data_editor(pd.DataFrame(style_rows), hide_index=True,
+                              key=f"{pid}-style-{sig}")
 
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, ax = plt.subplots(figsize=(7, 4.2) if compact else (9, 5))
     if color_mode == "Gradient" and series:
         cmap = plt.get_cmap(cmap_name)
         colors = [cmap(v) for v in np.linspace(0, 1, len(series))] \
@@ -388,46 +556,47 @@ def plot_data_view(session):
     if show_legend and series:
         ax.legend(fontsize=leg_size, loc=LEGEND_POS[leg_pos], ncol=int(leg_cols))
 
-    st.pyplot(fig)
+    st.pyplot(fig, width="stretch")
+    download_png(fig, pid)
     plt.close(fig)
     st.caption(f"{len(series)} series from {len(names)} dataset(s)")
-
 
 # ==================== main ====================
 st.set_page_config(page_title="Session Plotter", layout="wide")
 st.title("Session Plotter")
-st.caption("Load a session JSON from 'Plot data.py' or 'angular polar.py'")
+st.caption("Load session JSONs from 'Plot data.py' / 'angular polar.py' "
+           "(multi-upload, or ?session=a.json;b.json) and compare side by side.")
 
-mode = st.sidebar.radio("Mode", ["Angular Polar", "Plot Data"])
-up = st.sidebar.file_uploader("Session JSON", type="json")
+panels = collect_sessions()
+if not panels:
+    st.info("Upload one or more session JSONs in the sidebar and the plots "
+            "appear here. Sessions from both Tk apps are detected "
+            "automatically ('files' = Angular Polar, 'datasets' = Plot Data).")
+    st.stop()
 
-session = None
-if up is not None:
-    try:
-        session = json.load(up)
-    except Exception as e:
-        st.error(f"Bad JSON: {e}")
-else:
-    # optional: ?session=path/to/session.json in the URL
-    qpath = st.query_params.get("session")
-    if qpath and os.path.isfile(qpath):
-        try:
-            with open(qpath, "r", encoding="utf-8") as f:
-                session = json.load(f)
-        except Exception as e:
-            st.error(f"Bad session file {qpath}: {e}")
+top1, top2 = st.columns([1, 1])
+ncols = top1.selectbox("Panels per row", [1, 2, 3],
+                       index=min(len(panels) - 1, 1), key="panels-per-row")
+sync = len(panels) > 1 and top2.toggle("Sync settings across panels", value=True,
+                                       key="sync-panels")
+st.caption(f"{len(panels)} session(s): " + " · ".join(
+    f"`{p['name']}` ({TYPE_LABEL[p['type']]})" for p in panels))
 
-if session is not None:
-        if mode == "Angular Polar":
-            if "files" not in session:
-                st.error("No 'files' key - looks like a Plot Data session. Switch mode.")
-            else:
-                angular_polar_view(session)
-        else:
-            if "datasets" not in session:
-                st.error("No 'datasets' key - looks like an Angular Polar session. Switch mode.")
-            else:
-                plot_data_view(session)
-else:
-    st.info("Upload a session JSON in the sidebar, pick the mode, and the plot appears here.")
+ov = shared_settings() if sync else None
 
+# grid of panels: each uploaded/URL session becomes one plot panel
+for r0 in range(0, len(panels), ncols):
+    row_panels = panels[r0:r0 + ncols]
+    grid = st.columns(ncols)
+    for j, (col, p) in enumerate(zip(grid, row_panels)):
+        pid = f"panel{r0 + j}"
+        with col:
+            st.markdown(f"**{p['name']}** — `{TYPE_LABEL[p['type']]}`")
+            st.divider()
+            try:
+                if p["type"] == "angular":
+                    render_angular(p["session"], pid, ov, compact=ncols > 1)
+                else:
+                    render_plotdata(p["session"], pid, ov, compact=ncols > 1)
+            except Exception as e:  # one bad session never kills the page
+                st.error(f"{p['name']}: {e}")

@@ -11,6 +11,28 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-Upload a session JSON in the sidebar (or open `?session=path/to/session.json`).
-Modes: "Angular Polar" for sessions with a `files` key, "Plot Data" for
-sessions with a `datasets` key.
+## Loading sessions
+
+- Upload one **or several** session JSONs in the sidebar — each becomes a
+  plot panel, and the session type is detected automatically
+  (`files` key = Angular Polar, `datasets` key = Plot Data).
+- Or pass files in the URL (repeatable, or `;`-separated on Windows):
+  `?session=path/a.json;path/b.json`.
+
+## Comparing sessions
+
+- **Panels per row** (1–3): lay the loaded sessions out side by side.
+- **Sync settings across panels**: one shared control block (X/Y columns,
+  x slice values, slice mode, theta zero/direction/angle display, plot
+  type, dividers, log/grid) applied to every panel — e.g. compare the
+  same x-slice across several angle scans. Turn it off for fully
+  independent per-panel settings.
+- Each panel has its own **Download PNG** button; a bad session only
+  disables its own panel.
+
+## Self-check
+
+```bash
+python streamlit_app.py --self-check
+```
+
