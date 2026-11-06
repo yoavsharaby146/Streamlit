@@ -18,6 +18,8 @@ streamlit run streamlit_app.py
   (`files` key = Angular Polar, `datasets` key = Plot Data).
 - Or pass files in the URL (repeatable, or `;`-separated on Windows):
   `?session=path/a.json;path/b.json`.
+- Add `&cols=3` (or `&cols=2`) to force the panels-per-row layout when
+  sharing a link.
 
 ## Comparing sessions
 
@@ -29,6 +31,10 @@ streamlit run streamlit_app.py
   independent per-panel settings.
 - Each panel has its own **Download PNG** button; a bad session only
   disables its own panel.
+- Polar panels show an **X-slice slider right under the plot** (also in
+  multi-column mode). With sync on, dragging it updates the shared X —
+  every polar panel scrubs together; with sync off it moves only its own
+  panel.
 
 ## Self-check
 

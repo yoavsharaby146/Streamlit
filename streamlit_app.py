@@ -162,12 +162,13 @@ def shared_settings():
     Blank text fields mean 'keep each panel's own choice'."""
     with st.expander("Shared settings — applied to every panel", expanded=True):
         c1, c2, c3 = st.columns(3)
-        x_col = c1.text_input("X column",
+        x_col = c1.text_input("X column", key="shared-xcol",
                               help="Applied where the column exists; blank = per panel")
-        y_col = c2.text_input("Y column",
+        y_col = c2.text_input("Y column", key="shared-ycol",
                               help="First Y for Plot Data; blank = per panel")
-        title = c3.text_input("Title", help="Overrides every panel title; blank = per panel")
-        x_text = c1.text_input("X value(s) — polar slices",
+        title = c3.text_input("Title", key="shared-title",
+                              help="Overrides every panel title; blank = per panel")
+        x_text = c1.text_input("X value(s) — polar slices", key="shared-xtext",
                                help="e.g. 5 or 2, 5, 8; blank = per panel")
         slice_mode = c2.selectbox("Polar slice mode", SLICE_MODES)
         theta_zero = c3.selectbox("Polar theta zero", THETA_ZERO_OPTS)
@@ -195,6 +196,19 @@ def download_png(fig, pid):
     fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
     st.download_button("Download PNG", buf.getvalue(), file_name=f"{pid}.png",
                        mime="image/png", key=f"{pid}-dl")
+
+def _x_slider_changed(pid):
+    """A panel's X slider moved: write the value back to its source —
+    the shared X field when syncing (all panels scrub together), or the
+    panel's own X field otherwise."""
+    val = st.session_state[f"{pid}-xslider"]
+    text = f"{val:g}"
+    st.session_state[f"{pid}-xtext_last"] = text
+    if st.session_state.get("sync-panels", False):
+        st.session_state["shared-xtext"] = text
+    else:
+        st.session_state[f"{pid}-xval"] = text
+
 
 # ==================== Angular Polar panel ====================
 def render_angular(session, pid, ov, compact):
@@ -292,12 +306,12 @@ def render_angular(session, pid, ov, compact):
     except ValueError:
         st.error("X value(s) must be numbers, e.g. 5 or 2, 5, 8")
         return
-    if len(vals) == 1 and ov is None:
-        new = st.slider("X slider", min_value=lo, max_value=hi,
-                        value=min(max(vals[0], lo), hi),
-                        step=(hi - lo) / 400.0, format="%g", key=f"{pid}-slider")
-        if abs(new - vals[0]) > 1e-12:
-            vals = [new]
+    # keep the panel slider in sync with the typed / shared X value
+    # (the slider itself is rendered under the plot, below)
+    if len(vals) == 1 and hi > lo:
+        if st.session_state.get(f"{pid}-xtext_last") != f"{vals[0]:g}":
+            st.session_state[f"{pid}-xslider"] = min(max(vals[0], lo), hi)
+            st.session_state[f"{pid}-xtext_last"] = f"{vals[0]:g}"
 
     # ---- plot ----
     fig, ax = plt.subplots(figsize=(6.2, 5.6) if compact else (7, 6),
@@ -361,6 +375,12 @@ def render_angular(session, pid, ov, compact):
         ttl += "\nWARNING: x outside range for some file(s), clamped to end value"
     ax.set_title(ttl, fontsize=11, fontweight="bold", pad=20)
     st.pyplot(fig, width="stretch")
+    # X slider directly under the polar plot: always visible, even in
+    # compact multi-column mode; syncs the shared X when syncing is on
+    if len(vals) == 1 and hi > lo:
+        st.slider("X slice", min_value=lo, max_value=hi,
+                  step=(hi - lo) / 400.0, format="%g", key=f"{pid}-xslider",
+                  on_change=_x_slider_changed, args=(pid,))
     download_png(fig, pid)
     plt.close(fig)
 
@@ -575,8 +595,21 @@ if not panels:
     st.stop()
 
 top1, top2 = st.columns([1, 1])
+# ?cols=1|2|3 (or ?per_row=) forces the layout for a shared link;
+# without it: 1 session -> full width, 2+ -> two per row
+url_cols = None
+for q in st.query_params.get_all("cols") + st.query_params.get_all("per_row"):
+    try:
+        v = int(q)
+    except (TypeError, ValueError):
+        continue
+    if v in (1, 2, 3):
+        url_cols = v
+        break
+default_cols = url_cols or min(len(panels), 2)
 ncols = top1.selectbox("Panels per row", [1, 2, 3],
-                       index=min(len(panels) - 1, 1), key="panels-per-row")
+                       index=[1, 2, 3].index(default_cols), key="panels-per-row",
+                       help="Can also be set in the URL, e.g. &cols=3")
 sync = len(panels) > 1 and top2.toggle("Sync settings across panels", value=True,
                                        key="sync-panels")
 st.caption(f"{len(panels)} session(s): " + " · ".join(
