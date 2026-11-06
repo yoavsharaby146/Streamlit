@@ -16,6 +16,8 @@ streamlit run streamlit_app.py
 - Upload one **or several** session JSONs in the sidebar — each becomes a
   plot panel, and the session type is detected automatically
   (`files` key = Angular Polar, `datasets` key = Plot Data).
+  (The picker accepts any file — handy on phones, where cloud providers
+  like Dropbox don't flag files as .json; contents are validated on load.)
 - Or pass files in the URL (repeatable, or `;`-separated on Windows):
   `?session=path/a.json;path/b.json`.
 - Add `&cols=3` (or `&cols=2`) to force the panels-per-row layout when

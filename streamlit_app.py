@@ -174,8 +174,12 @@ if __name__ == "__main__" and "--self-check" in sys.argv:
 def collect_sessions():
     """Gather (name, type, session) panels from multi-upload + ?session= URLs."""
     raw = []  # (name, parsed-or-None)
-    ups = st.sidebar.file_uploader("Session JSON(s)", type="json",
-                                   accept_multiple_files=True)
+    ups = st.sidebar.file_uploader(
+        "Session JSON(s)",
+        accept_multiple_files=True,
+        help="Any file can be picked - it is validated as JSON on load "
+             "(needed for cloud-storage providers like Dropbox on phones, "
+             "which don't report the .json file type to the picker)")
     for f in ups or []:
         try:
             raw.append((f.name, json.load(f)))
