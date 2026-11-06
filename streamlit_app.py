@@ -36,7 +36,8 @@ SLICE_MODES = ["Linear interpolation", "Nearest row"]
 LEGEND_POS = {"best": "best", "upper right": "upper right",
               "upper left": "upper left", "lower right": "lower right",
               "lower left": "lower left", "outside right": "center left"}
-CMAPS = ["viridis", "plasma", "inferno", "magma", "turbo", "jet"]
+# every colormap matplotlib knows (used by Plot Data "Gradient" colors)
+CMAPS = sorted(matplotlib.colormaps())
 TYPE_LABEL = {"angular": "Angular Polar", "plotdata": "Plot Data"}
 
 
@@ -461,8 +462,11 @@ def render_plotdata(session, pid, ov, compact):
             st.number_input("Divide Y by", value=_f(dt.get("y_div")), key=f"{pid}-ydiv")
         color_mode = st.radio("Colors", ["Cycle", "Gradient"], horizontal=True,
                               key=f"{pid}-cmode")
-        cmap_name = st.selectbox("Colormap", CMAPS, key=f"{pid}-cmap",
-                                 disabled=(color_mode != "Gradient"))
+        cmap_name = st.selectbox(
+            "Colormap", CMAPS, key=f"{pid}-cmap",
+            index=opt_index(CMAPS, ps.get("colormap", session.get("colormap")),
+                            CMAPS.index("viridis")),
+            disabled=(color_mode != "Gradient"))
         if ov is not None:
             st.caption(f"synced: {plot_type}, divide X by {x_div:g}, "
                        f"Y by {y_div:g}, X log={ov['x_log']}, Y log={ov['y_log']}")
