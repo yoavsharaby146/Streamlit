@@ -609,6 +609,10 @@ st.caption("Load session JSONs from 'Plot data.py' / 'angular polar.py' "
            "(multi-upload, or ?session=a.json;b.json) and compare side by side.")
 
 panels = collect_sessions()
+# shows which deployed commit is running (Streamlit Cloud sets this)
+_commit = os.environ.get("STREAMLIT_GIT_COMMIT_HASH")
+if _commit:
+    st.sidebar.caption(f"deployed commit: {_commit[:7]}")
 if not panels:
     st.info("Upload one or more session JSONs in the sidebar and the plots "
             "appear here. Sessions from both Tk apps are detected "
