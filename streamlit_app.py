@@ -40,6 +40,12 @@ CMAPS = ["viridis", "plasma", "inferno", "magma", "turbo", "jet"]
 TYPE_LABEL = {"angular": "Angular Polar", "plotdata": "Plot Data"}
 
 
+# fonts actually installed where the app runs (Streamlit Cloud's Linux
+# container has no Arial/Calibri etc. - only list what matplotlib finds)
+FONT_OPTIONS = sorted({f.name for f in matplotlib.font_manager.fontManager.ttflist})
+DEFAULT_FONT = "DejaVu Sans" if "DejaVu Sans" in FONT_OPTIONS else (FONT_OPTIONS[0] if FONT_OPTIONS else "")
+
+
 def _f(v, default=1.0):
     try:
         return float(v)
@@ -485,9 +491,8 @@ def render_plotdata(session, pid, ov, compact):
 
     # ---- fonts & legend ----
     with st.expander("Fonts & legend"):
-        font_fam = st.selectbox("Font", ["Arial", "DejaVu Sans", "Calibri",
-                                         "Times New Roman", "Consolas"],
-                                key=f"{pid}-font")
+        font_fam = st.selectbox("Font", FONT_OPTIONS, key=f"{pid}-font",
+                                index=opt_index(FONT_OPTIONS, DEFAULT_FONT))
         title_size = st.number_input("Title size", 8, 30,
                                      value=int(_f(fs.get("title_size"), 12)),
                                      key=f"{pid}-tsize")
