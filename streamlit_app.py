@@ -571,7 +571,14 @@ def render_plotdata(session, pid, ov, compact):
 
     # ---- data & transform ----
     with st.expander("Data & transform", expanded=not compact):
-        names = st.multiselect("Datasets", list(dfs), default=list(dfs),
+        # default to the datasets that were SELECTED in 'Plot data.py'
+        # (saved as listbox indices in ui_state.selected_datasets)
+        _ds_names = list(dfs)
+        _ui_sel = session.get("ui_state", {}).get("selected_datasets") or []
+        _saved_sel = [_ds_names[i] for i in _ui_sel
+                      if isinstance(i, int) and 0 <= i < len(_ds_names)]
+        names = st.multiselect("Datasets", _ds_names,
+                               default=_saved_sel or _ds_names,
                                key=f"{pid}-names")
         ref = dfs[names[0]] if names else next(iter(dfs.values()))
         cols = list(ref.columns)
@@ -643,6 +650,8 @@ def render_plotdata(session, pid, ov, compact):
             z_div = st.number_input("Divide Z by", value=_f(dt.get("z_div")),
                                     key=f"{pid}-zdiv")
         color_mode = st.radio("Colors", ["Cycle", "Gradient"], horizontal=True,
+                              index=opt_index(["Cycle", "Gradient"],
+                                              ps.get("color_mode")),
                               key=f"{pid}-cmode")
         cmap_name = st.selectbox(
             "Colormap", CMAPS, key=f"{pid}-cmap",
