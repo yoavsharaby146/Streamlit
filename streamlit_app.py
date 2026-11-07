@@ -109,6 +109,38 @@ def detect_session_type(session):
     return None
 
 
+@st.cache_data(show_spinner=False)
+def _load_session_cached(data: bytes):
+    """Parse session JSON ONCE per file content (cache_data hashes the raw
+    bytes, so any change to the file triggers a fresh parse). Plot Data /
+    Angular Polar DataFrames are pre-built here and returned with the
+    session, so widget reruns skip re-parsing big JSONs entirely."""
+    session = json.loads(data.decode("utf-8"))
+    stype = detect_session_type(session)
+    if stype == "plotdata":
+        session["_dfs"] = {
+            name: pd.DataFrame(d["data"], columns=d["columns"])
+            for name, d in session.get("datasets", {}).items()}
+    elif stype == "angular":
+        session["_dfs"] = [pd.DataFrame(f["rows"], columns=f["columns"])
+                           for f in session.get("files", [])]
+    return stype, session
+
+
+@st.cache_data(show_spinner=False)
+def _load_session_path(path: str, mtime: float):
+    """Load a ?session= file from disk, cached by (path, mtime)."""
+    with open(path, "rb") as fh:
+        return _load_session_cached(fh.read())
+
+
+@st.cache_data(show_spinner=False)
+def _grid_map_cached(xs, ys, zs, res=300):
+    """Color Map gridding, cached on the (divided) data arrays so cosmetic
+    updates (labels, ranges, titles) never re-interpolate."""
+    return _grid_map(xs, ys, zs, res)
+
+
 def _grid_map(xs, ys, zs, res=300):
     """Grid (x, y, z) data onto a regular grid for Color Map plots.
 
@@ -173,7 +205,7 @@ if __name__ == "__main__" and "--self-check" in sys.argv:
 # ==================== session loading ====================
 def collect_sessions():
     """Gather (name, type, session) panels from multi-upload + ?session= URLs."""
-    raw = []  # (name, parsed-or-None)
+    raw = []  # (name, session-with-_dfs)
     ups = st.sidebar.file_uploader(
         "Session JSON(s)",
         accept_multiple_files=True,
@@ -182,9 +214,16 @@ def collect_sessions():
              "which don't report the .json file type to the picker)")
     for f in ups or []:
         try:
-            raw.append((f.name, json.load(f)))
+            # cached on the file CONTENT: parsed once, reused on every rerun
+            _t, s = _load_session_cached(f.getvalue())
         except Exception as e:
             st.sidebar.error(f"{f.name}: bad JSON ({e})")
+            continue
+        if _t is None:
+            st.sidebar.error(f"{f.name}: unknown session format "
+                             "(needs a 'files' or 'datasets' key)")
+        else:
+            raw.append((f.name, s))
     # ?session=a.json;b.json in the URL (each entry may itself be a
     # ';'-separated list, and the param may be repeated)
     for qval in st.query_params.get_all("session"):
@@ -195,19 +234,21 @@ def collect_sessions():
                 st.sidebar.warning(f"session file not found: {q}")
                 continue
             try:
-                with open(q, "r", encoding="utf-8") as fh:
-                    raw.append((os.path.basename(q), json.load(fh)))
+                # cached by (path, mtime): re-read only when the file changes
+                _t, s = _load_session_path(q, os.path.getmtime(q))
             except Exception as e:
                 st.sidebar.error(f"{q}: bad session ({e})")
+                continue
+            if _t is None:
+                st.sidebar.error(f"{q}: unknown session format "
+                                 "(needs a 'files' or 'datasets' key)")
+            else:
+                raw.append((os.path.basename(q), s))
 
     panels = []
     for name, s in raw:
-        t = detect_session_type(s)
-        if t is None:
-            st.sidebar.error(f"{name}: unknown session format "
-                             "(needs a 'files' or 'datasets' key)")
-        else:
-            panels.append({"name": name, "type": t, "session": s})
+        panels.append({"name": name, "type": detect_session_type(s),
+                       "session": s})
     return panels
 
 
@@ -344,7 +385,8 @@ def render_angular(session, pid, ov, compact):
                      expanded=not compact):
         edited = st.data_editor(rows, hide_index=True, key=f"{pid}-angle_table")
 
-    dfs = [pd.DataFrame(f["rows"], columns=f["columns"]) for f in files]
+    dfs = session.get("_dfs") or [pd.DataFrame(f["rows"], columns=f["columns"])
+                                   for f in files]
     cols = list(dfs[0].columns)
 
     def pick(shared, saved, fallback):
@@ -519,8 +561,9 @@ def render_plotdata(session, pid, ov, compact):
     ts = session.get("tick_settings", {})
     styles = session.get("styles", {})
 
-    dfs = {name: pd.DataFrame(d["data"], columns=d["columns"])
-           for name, d in datasets.items()}
+    dfs = session.get("_dfs") or {
+        name: pd.DataFrame(d["data"], columns=d["columns"])
+        for name, d in datasets.items()}
 
     # the plot renders FIRST in the panel; all settings live in
     # collapsible expanders below it so panels align side by side
@@ -723,7 +766,7 @@ def render_plotdata(session, pid, ov, compact):
             xs = pd.to_numeric(d[x_col], errors="coerce").to_numpy(float) / x_div
             ys = pd.to_numeric(d[y_col], errors="coerce").to_numpy(float) / y_div
             zs = pd.to_numeric(d[z_col], errors="coerce").to_numpy(float) / z_div
-            zi, gx, gy = _grid_map(xs, ys, zs)
+            zi, gx, gy = _grid_map_cached(xs, ys, zs)
             maps.append((zi, gx, gy))
             zvals.append(zs[np.isfinite(zs)])
         if not maps:
