@@ -245,9 +245,24 @@ def _panel_pid(name, occurrence=0):
     Positional ids (panel0, panel1, ...) let a swapped/reordered file
     inherit another file's widget state, so its saved axis ranges, labels
     and styles were never loaded (widget defaults only apply the first
-    time a key is seen in a browser session)."""
+    time a key is seen in a browser session). The duplicate suffix uses
+    '#' (not '-') so one panel's id can never be a key-prefix of another
+    panel's id: 'reset to file values' deletes keys by pid prefix and
+    must stay scoped to exactly one panel."""
     tag = hashlib.md5(name.encode("utf-8")).hexdigest()[:6]
-    return f"p-{tag}" + (f"-{occurrence}" if occurrence else "")
+    return f"p-{tag}" + (f"#{occurrence}" if occurrence else "")
+
+
+def _add_panel(raw, name, session):
+    """Append (name, session) to the panel list, making the DISPLAY name
+    unique ('x (#2)') when two loaded sessions share a basename - e.g.
+    day1/session.json + day2/session.json - so the headers are told apart
+    and each panel gets its own name-derived widget-id prefix."""
+    n, k = name, 2
+    while any(n == r[0] for r in raw):
+        n = f"{name} (#{k})"
+        k += 1
+    raw.append((n, session))
 
 
 # ==================== built-in demo sessions ====================
@@ -327,6 +342,10 @@ if __name__ == "__main__" and "--self-check" in sys.argv:
     assert _panel_pid("a.json") == _panel_pid("a.json")
     assert _panel_pid("a.json") != _panel_pid("b.json")
     assert _panel_pid("a.json", 0) != _panel_pid("a.json", 1)
+    # a duplicate-name panel's keys must never fall inside another panel's
+    # reset prefix ('reset to file values' deletes by pid prefix - this is
+    # what used to make resetting one panel wipe its same-named twin)
+    assert f"{_panel_pid('a.json', 1)}-xval".startswith(_panel_pid("a.json") + "-") is False
     # dark-theme post-processing recolors text; light leaves the figure alone
     fig, ax0 = plt.subplots()
     ax0.set_title("t")
@@ -354,7 +373,7 @@ def collect_sessions():
                        ("demo_plotdata.json", _demo_plotdata)):
             ses = mk()
             _attach_dfs(ses)
-            raw.append((nm, ses))
+            _add_panel(raw, nm, ses)
     ups = st.sidebar.file_uploader(
         "Session JSON(s)",
         accept_multiple_files=True,
@@ -372,7 +391,7 @@ def collect_sessions():
             st.sidebar.error(f"{f.name}: unknown session format "
                              "(needs a 'files' or 'datasets' key)")
         else:
-            raw.append((f.name, s))
+            _add_panel(raw, f.name, s)
     # ?session=a.json;b.json in the URL (each entry may itself be a
     # ';'-separated list, and the param may be repeated)
     for qval in st.query_params.get_all("session"):
@@ -392,7 +411,7 @@ def collect_sessions():
                 st.sidebar.error(f"{q}: unknown session format "
                                  "(needs a 'files' or 'datasets' key)")
             else:
-                raw.append((os.path.basename(q), s))
+                _add_panel(raw, os.path.basename(q), s)
 
     panels = []
     for name, s in raw:

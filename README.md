@@ -57,9 +57,11 @@ streamlit run streamlit_app.py
   fragment), so scrubbing stays instant even with several panels loaded.
 - Each panel's settings are remembered per browser session under an id
   derived from the session **name** (not its position), so swapping or
-  reordering files never mixes up remembered values; a panel's
-  **↺ Reset to file values** button forgets them and reloads the ranges,
-  labels and styles saved in the session JSON.
+  reordering files never mixes up remembered values; sessions sharing a
+  basename are renamed (`session.json (#2)`) so every panel keeps its own
+  id. A panel's **↺ Reset to file values** button forgets them and
+  reloads the ranges, labels and styles saved in the session JSON — it
+  is strictly scoped to that one panel.
 
 ## Self-check
 

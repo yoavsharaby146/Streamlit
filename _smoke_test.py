@@ -70,4 +70,37 @@ at.run()
 assert not at.exception, [e.value for e in at.exception]
 assert at.session_state["demo-on"] is False
 
+# 6) duplicate-basename URL sessions: distinct panel ids, and resetting
+# one panel never touches its same-named twin's settings
+import json as _json
+import os as _os
+import tempfile as _tf
+
+_ses = {"files": [{"path": "a_0deg.csv", "angle": 0.0,
+                   "columns": ["x", "y"],
+                   "rows": [[0.0, 1.0], [1.0, 2.0]]}],
+        "settings": {"x_col": "x", "y_col": "y", "x_val": "0.5"}}
+_paths = []
+for _ in (1, 2):
+    _d = _tf.mkdtemp()
+    _p = _os.path.join(_d, "dup.json")
+    with open(_p, "w") as _fh:
+        _json.dump(_ses, _fh)
+    _paths.append(_p)
+at2 = AppTest.from_file(r"c:\Users\Yoav\VScode\streamlit-plotter\streamlit_app.py",
+                        default_timeout=120)
+at2.query_params["session"] = ";".join(_paths)
+at2.run()
+assert not at2.exception, [e.value for e in at2.exception]
+D1, D2 = pid_for("dup.json"), pid_for("dup.json (#2)")
+assert at2.slider(key=f"{D1}-xslider").value == 0.5  # both loaded, file x_val
+at2.slider(key=f"{D2}-xslider").set_value(0.75).run()
+assert not at2.exception, [e.value for e in at2.exception]
+at2.button(key=f"{D1}-resetbtn").click()  # reset twin #1...
+at2.run()
+assert not at2.exception, [e.value for e in at2.exception]
+# ...twin #2 keeps its scrubbed value, twin #1 is back at the file value
+assert at2.slider(key=f"{D2}-xslider").value == 0.75
+assert at2.slider(key=f"{D1}-xslider").value == 0.5
+
 print("AppTest smoke OK")
