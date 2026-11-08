@@ -41,6 +41,9 @@ streamlit run streamlit_app.py
   are reshaped exactly, scattered data is interpolated).
 - Polar panels show an **X-slice slider right under the plot** (also in
   multi-column mode); dragging it moves only its own panel.
+- Polar panels have **manual R min / R max fields** in *Polar settings*
+  (e.g. 0 to 10, 0 to 20, or −10 to 10); leave either blank for automatic
+  scaling of that side, and negative minima plot mirrored as usual.
 
 ## Performance & polish
 

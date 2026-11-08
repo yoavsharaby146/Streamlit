@@ -38,6 +38,18 @@ sl = at.slider(key=f"{PID_ANG}-xslider")
 sl.set_value(6.0).run()
 assert not at.exception, [e.value for e in at.exception]
 
+# 3.5) manual polar R range: -10..10 renders, rmin>=rmax is caught, back to auto
+at.number_input(key=f"{PID_ANG}-rmin").set_value(-10.0).run()
+at.number_input(key=f"{PID_ANG}-rmax").set_value(10.0).run()
+assert not at.exception, [e.value for e in at.exception]
+at.number_input(key=f"{PID_ANG}-rmin").set_value(10.0).run()  # min >= max -> error
+errs = [e.value for e in at.error]
+assert errs and "R min" in errs[0]
+at.number_input(key=f"{PID_ANG}-rmin").set_value(None).run()  # back to auto
+at.number_input(key=f"{PID_ANG}-rmax").set_value(None).run()
+assert not at.exception, [e.value for e in at.exception]
+assert at.number_input(key=f"{PID_ANG}-rmin").value is None
+
 # 4) switch the Plot Data panel to Color Map (panels are independent now)
 pt = at.selectbox(key=f"{PID_PD}-ptype")
 pt.set_value("Color Map").run()

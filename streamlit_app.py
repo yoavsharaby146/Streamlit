@@ -438,7 +438,7 @@ def _download_button(png, pid):
 @st.cache_data(show_spinner=False, max_entries=64)
 def _polar_png(dfs, include, angles, x_col, y_col, vals, slice_mode, theta_zero,
                direction, angle_display, marker, connect, close, r_offset,
-               angle_labels, title, compact, dark):
+               r_min, r_max, angle_labels, title, compact, dark):
     """Angular polar figure -> (PNG bytes, any_clamped); PNG is None when
     nothing could be plotted."""
     # compact (side-by-side): shorter figure so the slider + caption
@@ -496,6 +496,9 @@ def _polar_png(dfs, include, angles, x_col, y_col, vals, slice_mode, theta_zero,
         return None, any_clamped
     if len(vals) > 1:
         ax.legend(loc="upper right", fontsize=9)  # inside: canvas is fixed
+    if r_min is not None or r_max is not None:
+        # manual R range: a blank side (None) stays autoscaled on that side
+        ax.set_rlim(bottom=r_min, top=r_max)
     ttl = title + (f"   (x = {vals[0]:g} @ {x_col})" if len(vals) == 1 else "")
     if any_clamped:
         ttl += "\nWARNING: x outside range for some file(s), clamped to end value"
@@ -506,7 +509,8 @@ def _polar_png(dfs, include, angles, x_col, y_col, vals, slice_mode, theta_zero,
 @st.fragment()
 def _polar_plot(pid, dfs, include, angles, x_col, y_col, vals, slice_mode,
                 theta_zero, direction, angle_display, marker, connect, close,
-                r_offset, angle_labels, title, compact, dark, lo, hi):
+                r_offset, r_min, r_max, angle_labels, title, compact, dark,
+                lo, hi):
     """Polar plot + X-slice slider + export, isolated in a fragment so
     dragging the slider reruns ONLY this block (the session_state read
     picks up the new slider value; `vals` keeps its last full-run value)."""
@@ -516,8 +520,8 @@ def _polar_plot(pid, dfs, include, angles, x_col, y_col, vals, slice_mode,
         vals = (min(max(sval, lo), hi),)
     png, _clamped = _polar_png(dfs, include, angles, x_col, y_col, vals,
                                slice_mode, theta_zero, direction, angle_display,
-                               marker, connect, close, r_offset, angle_labels,
-                               title, compact, dark)
+                               marker, connect, close, r_offset, r_min, r_max,
+                               angle_labels, title, compact, dark)
     if png is None:
         st.warning("No points plotted (check angle / include / x settings).")
         return
@@ -559,6 +563,17 @@ def _z_col_changed(pid):
 
 
 # ==================== Angular Polar panel ====================
+def _num_or_none(v):
+    """Session settings may store numbers as text (the Tk app saves strings);
+    blank / non-numeric means 'leave that side autoscaled'."""
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def render_angular(session, pid, compact):
     files = session.get("files", [])
     if not files:
@@ -621,6 +636,17 @@ def render_angular(session, pid, compact):
         angle_labels = c2.checkbox("Angle labels",
                                    value=s.get("angle_labels", True),
                                    key=f"{pid}-alab")
+        c1, c2 = st.columns(2)
+        r_min = c1.number_input("R min (blank = auto)",
+                                value=_num_or_none(s.get("r_min")), key=f"{pid}-rmin",
+                                format="%g",
+                                help="Fixed inner radius of the polar plot; "
+                                     "leave blank for automatic scaling.")
+        r_max = c2.number_input("R max (blank = auto)",
+                                value=_num_or_none(s.get("r_max")), key=f"{pid}-rmax",
+                                format="%g",
+                                help="Fixed outer radius of the polar plot; "
+                                     "leave blank for automatic scaling.")
         title = st.text_input("Title", value=s.get("title", "Angular Dependence"),
                               key=f"{pid}-title")
 
@@ -644,6 +670,13 @@ def render_angular(session, pid, compact):
             st.session_state[f"{pid}-xslider"] = min(max(vals[0], lo), hi)
             st.session_state[f"{pid}-xtext_last"] = f"{vals[0]:g}"
 
+    # manual R range: blank side stays autoscaled (None -> matplotlib auto)
+    r_min = None if r_min is None else float(r_min)
+    r_max = None if r_max is None else float(r_max)
+    if r_min is not None and r_max is not None and r_min >= r_max:
+        st.error("R min must be smaller than R max")
+        return
+
     # ---- plot: the figure render is cached, and the plot + X-slice slider
     # live in a fragment so dragging the slider reruns ONLY this panel ----
     include = tuple(bool(v) for v in edited["include"])
@@ -651,8 +684,8 @@ def render_angular(session, pid, compact):
     with plot_box:
         _polar_plot(pid, dfs, include, angles, x_col, y_col, tuple(vals),
                     slice_mode, theta_zero, direction, angle_display, marker,
-                    connect, close, r_offset, angle_labels, title, compact,
-                    _fig_theme_is_dark(), lo, hi)
+                    connect, close, r_offset, r_min, r_max, angle_labels, title,
+                    compact, _fig_theme_is_dark(), lo, hi)
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
