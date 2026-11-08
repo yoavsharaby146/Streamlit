@@ -231,10 +231,13 @@ def _apply_fig_theme(fig, dark):
 
 def _fig_bytes(fig, dark, dpi=200):
     """Theme a figure, serialize it to PNG bytes and close it. One render
-    serves both the on-screen image and the Download button."""
+    serves both the on-screen image and the Download button. The FULL
+    canvas is saved (no bbox_inches='tight'): the image size then depends
+    only on figsize, so cosmetic changes (legend on/off, fonts, labels)
+    never rescale the plot or shift the axes."""
     _apply_fig_theme(fig, dark)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(buf, format="png", dpi=dpi)
     plt.close(fig)
     return buf.getvalue()
 
@@ -492,7 +495,7 @@ def _polar_png(dfs, include, angles, x_col, y_col, vals, slice_mode, theta_zero,
         plt.close(fig)
         return None, any_clamped
     if len(vals) > 1:
-        ax.legend(loc="upper right", bbox_to_anchor=(1.25, 1.1), fontsize=9)
+        ax.legend(loc="upper right", fontsize=9)  # inside: canvas is fixed
     ttl = title + (f"   (x = {vals[0]:g} @ {x_col})" if len(vals) == 1 else "")
     if any_clamped:
         ttl += "\nWARNING: x outside range for some file(s), clamped to end value"

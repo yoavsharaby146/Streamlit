@@ -103,4 +103,50 @@ assert not at2.exception, [e.value for e in at2.exception]
 assert at2.slider(key=f"{D2}-xslider").value == 0.75
 assert at2.slider(key=f"{D1}-xslider").value == 0.5
 
+# 7) three DISTINCT-name panels (angular + two Plot Data): resetting any
+# one panel never changes the other panels' settings or manual ranges
+def _write(name, obj):
+    p = _os.path.join(_tf.mkdtemp(), name)
+    with open(p, "w") as fh:
+        _json.dump(obj, fh)
+    return p
+
+
+_ang3 = {"files": [
+    {"path": "a_0deg.csv", "angle": 0.0, "columns": ["x", "y"],
+     "rows": [[0.0, 1.0], [1.0, 2.0]]},
+    {"path": "a_30deg.csv", "angle": 30.0, "columns": ["x", "y"],
+     "rows": [[0.0, 2.0], [1.0, 1.0]]}],
+    "settings": {"x_col": "x", "y_col": "y", "x_val": "0.5"}}
+_pd = {"datasets": {"d1": {"columns": ["x", "y"],
+                           "data": [[float(i), float(i) % 3] for i in range(10)]}},
+       "axis_selections": {"x_column": "x", "y_column": ["y"]},
+       "axis_ranges": {"x_min": 1.0, "x_max": 8.0},
+       "plot_settings": {"plot_type": "Line"}}
+at3 = AppTest.from_file(r"c:\Users\Yoav\VScode\streamlit-plotter\streamlit_app.py",
+                        default_timeout=120)
+at3.query_params["session"] = ";".join([
+    _write("ang.json", _ang3), _write("pd1.json", _pd),
+    _write("pd2.json", _pd)])
+at3.run()
+assert not at3.exception, [e.value for e in at3.exception]
+P1 = pid_for("ang.json")
+P2, P3 = pid_for("pd1.json"), pid_for("pd2.json")
+# both plot panels loaded the file's saved x range
+assert at3.number_input(key=f"{P2}-xmin").value == 1.0
+assert at3.number_input(key=f"{P3}-xmin").value == 1.0
+# manual override on panel 3
+at3.number_input(key=f"{P3}-xmin").set_value(2.5).run()
+assert not at3.exception, [e.value for e in at3.exception]
+# resetting panel 1 (angular) and panel 2 leaves panel 3 untouched
+at3.button(key=f"{P1}-resetbtn").click()
+at3.run()
+assert not at3.exception, [e.value for e in at3.exception]
+assert at3.number_input(key=f"{P3}-xmin").value == 2.5
+at3.button(key=f"{P2}-resetbtn").click()
+at3.run()
+assert not at3.exception, [e.value for e in at3.exception]
+assert at3.number_input(key=f"{P3}-xmin").value == 2.5
+assert at3.number_input(key=f"{P2}-xmin").value == 1.0  # its own reset worked
+
 print("AppTest smoke OK")
